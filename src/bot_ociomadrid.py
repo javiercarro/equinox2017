@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from nltk.metrics import edit_distance
+from nltk import stem, tokenize
 
 """
 $ python3.5 guessa.py <token>
@@ -35,69 +36,84 @@ class Player(telepot.aio.helper.ChatHandler):
         self._status = 'EMPTY'
         self._st_cp = 0
         self._st_metric = ''
+        self.stemmer = stem.PorterStemmer()
 
     def _hint(self, answer, guess):
         if answer > guess:
             return 'larger'
         else:
             return 'smaller'
-			
-	def _calculate_command(command):
-		list_available_options = ["VIAJ", "COMPR", "FIESTA", "BAR", "RESTAURANTE", ""]
-		
-	    print ("\nUser Introduces command "+command)
+ 
+    def _calc_command(self, command):
+        list_available_options = ["VIAJ", "COMPR", "FIESTA", "BAR", "RESTAURANTE", ""]
+        dictionary = dict.fromkeys(list_available_options, command)
+
+        for key,value in dictionary.items() :
+            self.fuzzy_match(key, value)
+ 
+    def normalize(self, s):
+        words = tokenize.wordpunct_tokenize(s.lower().strip())
+        return ' '.join([self.stemmer.stem(w) for w in words])
+     
+    def fuzzy_match(self, s1, s2, max_dist=3):
+        print("\n"+s1+" - "+s2+" : "+ str(edit_distance(self.normalize(s1), self.normalize(s2))))
+        
+    def _calculate_command(self, command):
+        list_available_options = ["VIAJ", "COMPR", "FIESTA", "BAR", "RESTAURANTE", ""]
+        
+        print ("\nUser Introduces command "+command)
     
-		#GENERATE A KV DICTIONARY TO MATCH ALL INPUT COMMANDS VS ALL AVAILABLE OPTIONS
-		#WE WILL RETURN THE LEVENSHTEIN COEFFICIENTS FOR EACH INPUT COMMAND
-		#WE CAN ITERATE DIRECTLY OVER THE TWO LISTS, BUT I WANTED TO SHOW THAT I CAN OPERATE WITH DICTIONARIES :)
-		dictionary = dict.fromkeys(list_available_options, command)
-		levencoeff_min=None
-		minaction=''
-		minsuggestion =''
-		
-		for key,value in dictionary.items() :
-			
-			list_coeffs = []
+        #GENERATE A KV DICTIONARY TO MATCH ALL INPUT COMMANDS VS ALL AVAILABLE OPTIONS
+        #WE WILL RETURN THE LEVENSHTEIN COEFFICIENTS FOR EACH INPUT COMMAND
+        #WE CAN ITERATE DIRECTLY OVER THE TWO LISTS, BUT I WANTED TO SHOW THAT I CAN OPERATE WITH DICTIONARIES :)
+        dictionary = dict.fromkeys(list_available_options, command)
+        levencoeff_min=None
+        minaction=''
+        minsuggestion =''
+        
+        for key,value in dictionary.items() :
+            
+            list_coeffs = []
 
-			leven_coeff = edit_distance(key, value, substitution_cost=1, transpositions=True)
-			
-			if (levencoeff_min is None):
-				levencoeff_min = leven_coeff
-				minaction = key
-			
-			#NOTICE SUBSTITIUTIONS COST. WE CAN ADD MORE PENALTY TO THE COEFFICIENT FOR A SECUENTIAL SUBSTITUTION
-			#WE CAN EVEN ADD MORE PENALTY FOR TRANSPOSITION PAIRS (ab, ba)
-			#YOU CAN JUST TUNE THE CALCULATIONS
-			print ("-----------------------------------------------------")
-			print ("levenshtein coefficient for "+key+" "+value+":"+str(leven_coeff))
-			#WE CAN EVALUATE THE COEFFICIENT AND IF ITS VALUE IS LOWER THAN A THRESHOLD, 
-			#WE CAN SUGGEST THE COMMAND AGAINST WE ARE COMPARING
-			#OTHERWISE WE CAN JUST NOTIFY WE DIDNT UNDERSTOOD THE COMMAND
-			#JUST ADJUST THE COEFFICIENT THRESHOLD
-			
-			print ("Simulated output follows for all pairs:")
-			
-			if leven_coeff == 0:
-				print ("command recognized, exact match")            
-			elif leven_coeff > 4:
-				print ("command not recognized, please try again...")
-			else: print ("command "+value+", not recognized, maybe you were referring to "+key+"?")
-			
-			if (leven_coeff < levencoeff_min):
-				levencoeff_min = leven_coeff
-				minaction = key
-				
-		print ("\nAction suggested for command "+command+" (the one with lesser coefficient) is:")
-		#evaluate again to show minimal action
-		if levencoeff_min == 0:
-			print ("command recognized, exact match")            
-		elif levencoeff_min > 4:
-			print ("command "+command+" not recognized, please try again...")
-		else: print ("command "+command+" not recognized, maybe you were referring to "+minaction+"?")
+            leven_coeff = edit_distance(key, value, substitution_cost=1, transpositions=True)
+            
+            if (levencoeff_min is None):
+                levencoeff_min = leven_coeff
+                minaction = key
+            
+            #NOTICE SUBSTITIUTIONS COST. WE CAN ADD MORE PENALTY TO THE COEFFICIENT FOR A SECUENTIAL SUBSTITUTION
+            #WE CAN EVEN ADD MORE PENALTY FOR TRANSPOSITION PAIRS (ab, ba)
+            #YOU CAN JUST TUNE THE CALCULATIONS
+            print ("-----------------------------------------------------")
+            print ("levenshtein coefficient for "+key+" "+value+":"+str(leven_coeff))
+            #WE CAN EVALUATE THE COEFFICIENT AND IF ITS VALUE IS LOWER THAN A THRESHOLD, 
+            #WE CAN SUGGEST THE COMMAND AGAINST WE ARE COMPARING
+            #OTHERWISE WE CAN JUST NOTIFY WE DIDNT UNDERSTOOD THE COMMAND
+            #JUST ADJUST THE COEFFICIENT THRESHOLD
+            
+            print ("Simulated output follows for all pairs:")
+            
+            if leven_coeff == 0:
+                print ("command recognized, exact match")            
+            elif leven_coeff > 4:
+                print ("command not recognized, please try again...")
+            else: print ("command "+value+", not recognized, maybe you were referring to "+key+"?")
+            
+            if (leven_coeff < levencoeff_min):
+                levencoeff_min = leven_coeff
+                minaction = key
+                
+        print ("\nAction suggested for command "+command+" (the one with lesser coefficient) is:")
+        #evaluate again to show minimal action
+        if levencoeff_min == 0:
+            print ("command recognized, exact match")            
+        elif levencoeff_min > 4:
+            print ("command "+command+" not recognized, please try again...")
+        else: print ("command "+command+" not recognized, maybe you were referring to "+minaction+"?")
 
-		return minaction
-		
-		
+        return minaction
+        
+        
             
     def _make_plot_bbva(self, my_zipcode, my_column):
         my_column = my_column.upper()
@@ -168,14 +184,20 @@ class Player(telepot.aio.helper.ChatHandler):
         return 'D:/D4S/BBVA/output/ExampleMatPlotLib_Mob.png'
 
     async def open(self, initial_msg, seed):
-        await self.sender.sendMessage('Hola!\nPodemos hablar de cómo se gasta el dinero la gente en Madrid.\n¿De qué código postal te gustaría saber la media de importe de compras?')
+        #await self.sender.sendMessage('Hola!\nPodemos hablar de cómo se gasta el dinero la gente en Madrid.\n¿De qué código postal te gustaría saber la media de importe de compras?')
+        await self.sender.sendMessage('Hola!: http://www.google.es')
         return True  # prevent on_message() from being called on the initial message
 
     async def on_chat_message(self, msg):
         content_type, chat_type, chat_id = telepot.glance(msg)
 
-		self._calculate_command(msg['text']).upper()
+        #self._calculate_command(msg['text'].upper())
+        self._calc_command(msg['text'].upper())
+        await self.sender.sendMessage('Prueba más...')
+        return
+        
 		
+        
         #with open('D:/D4S/BotBD4SG/images/like.png', "rb") as image_file:
             #await self.sender.sendPhoto(image_file)
             #return
