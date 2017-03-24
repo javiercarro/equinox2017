@@ -16,7 +16,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from nltk.metrics import edit_distance
-from nltk import stem, tokenize
+from nltk import stem, tokenize, word_tokenize
+
+import googlemaps as gm
+
+#import PrettyTable
 
 """
 $ python3.5 guessa.py <token>
@@ -33,10 +37,10 @@ class Player(telepot.aio.helper.ChatHandler):
     def __init__(self, *args, **kwargs):
         super(Player, self).__init__(*args, **kwargs)
         self._answer = random.randint(0,99)
-        self._status = 'EMPTY'
+        self._status = 'NONE'
+        self._st_scope = 'NONE'
         self._st_cp = 0
-        self._st_metric = ''
-        self.stemmer = stem.PorterStemmer()
+        self._st_cp_list = []
 
     def _hint(self, answer, guess):
         if answer > guess:
@@ -44,77 +48,92 @@ class Player(telepot.aio.helper.ChatHandler):
         else:
             return 'smaller'
  
-    def _calc_command(self, command):
-        list_available_options = ["VIAJ", "COMPR", "FIESTA", "BAR", "RESTAURANTE", ""]
-        dictionary = dict.fromkeys(list_available_options, command)
+    def _list_places(self, zipcode):
 
-        for key,value in dictionary.items() :
-            self.fuzzy_match(key, value)
+        # Guardamos la respuesta de la llamada a la API Geocoding
+        geocode_result = gmaps.geocode(str(zipcode), region="es")
+
+        # Guardamos latitud y longitud 
+        lat = geocode_result[0]["geometry"]["location"]["lat"]
+        lng = geocode_result[0]["geometry"]["location"]["lng"]
+
+        # Nos quedamos con los lugares (places) cercanos a esa latitud y longitud
+        places = gmaps.places('restaurante', location=[lat, lng], radius=100, language="es-ES")["results"]
+
+        # Generamos un diccionario con los datos que nos interesan y luego un DataFrame a partir del diccionario
+        d = {}
+        for index, place in enumerate(places):
+            try:
+                url = gmaps.place(place["place_id"], language="es-ES")["result"]["url"] #Get the url
+            except:
+                url = "No URL from Google Places"
+                
+            try:
+                name = place["name"]
+            except:
+                name = "No name from Google Places"
+                
+            try:
+                rating = place["rating"]
+            except:
+                rating = None
+                
+            d[index] =  {"name": name,"rating": rating, "url": url}
+
+        df = pd.DataFrame(d).transpose()
+
+        # Sacamos el los 10 con mejor rating y los 10 con peor rating
+        top5 = df.sort_values(by="rating", ascending=False, na_position="last").head(5).reset_index().drop("index", axis=1)
+        last5 = df.sort_values(by="rating", ascending=True, na_position="first").head(5).reset_index().drop("index", axis=1)
+ 
+        return top5
+ 
+    def _extract_command(self, command):
+        try:
+            cp_int = int(command)
+            if cp_int < 28000 or cp_int > 28999:
+                print('El CP tiene que ser de Madrid.')
+                return
+            else:
+                self._st_cp = cp_int
+                return 'CP'
+        except ValueError:
+            print('No es un CP')
+
+        list_available_options = ["CP", "VIAJ", "EXCURSIÓN", "CENAR", "COMER", "TOMAR", "TAPAS", "CUANTO", "CUÁNTO", "CUESTA", "PRECIO", "COSTE", "RESTAURANTE", "LOCAL", "SUGERIR", "SUGERENCIA", "PROPON", "PROPUESTA"]
+        dictionary = dict.fromkeys(list_available_options, command)
+        s_txt = 'UNKNOWN'
+        score = 100
+        for key,value in dictionary.items():
+            print("\nIterate: "+key+" - "+value)
+            s_val = self.iterate_distance(key, value)
+            if s_val < score:
+                score = s_val
+                s_txt = key
+        return s_txt
+ 
+    def iterate_distance(self, key, sentence):
+        words = sentence.upper().split()
+        print(words)
+        score = 100
+        for txt in words:
+            if len(txt) > 3:
+                s_t = edit_distance(key, txt, substitution_cost = 1, transpositions = True)
+                if s_t <= score:
+                    score = s_t
+                print("\n"+key+" - "+txt+" : "+ str(score))
+        return score
  
     def normalize(self, s):
-        words = tokenize.wordpunct_tokenize(s.lower().strip())
+        self.stemmer = stem.PorterStemmer()
+        words = tokenize.wordpunct_tokenize(s.upper().strip())
         return ' '.join([self.stemmer.stem(w) for w in words])
      
     def fuzzy_match(self, s1, s2, max_dist=3):
-        print("\n"+s1+" - "+s2+" : "+ str(edit_distance(self.normalize(s1), self.normalize(s2))))
+        score = edit_distance(self.normalize(s1), self.normalize(s2))
+        print("\n"+s1+" - "+s2+" : "+ str(score))
+        return score
         
-    def _calculate_command(self, command):
-        list_available_options = ["VIAJ", "COMPR", "FIESTA", "BAR", "RESTAURANTE", ""]
-        
-        print ("\nUser Introduces command "+command)
-    
-        #GENERATE A KV DICTIONARY TO MATCH ALL INPUT COMMANDS VS ALL AVAILABLE OPTIONS
-        #WE WILL RETURN THE LEVENSHTEIN COEFFICIENTS FOR EACH INPUT COMMAND
-        #WE CAN ITERATE DIRECTLY OVER THE TWO LISTS, BUT I WANTED TO SHOW THAT I CAN OPERATE WITH DICTIONARIES :)
-        dictionary = dict.fromkeys(list_available_options, command)
-        levencoeff_min=None
-        minaction=''
-        minsuggestion =''
-        
-        for key,value in dictionary.items() :
-            
-            list_coeffs = []
-
-            leven_coeff = edit_distance(key, value, substitution_cost=1, transpositions=True)
-            
-            if (levencoeff_min is None):
-                levencoeff_min = leven_coeff
-                minaction = key
-            
-            #NOTICE SUBSTITIUTIONS COST. WE CAN ADD MORE PENALTY TO THE COEFFICIENT FOR A SECUENTIAL SUBSTITUTION
-            #WE CAN EVEN ADD MORE PENALTY FOR TRANSPOSITION PAIRS (ab, ba)
-            #YOU CAN JUST TUNE THE CALCULATIONS
-            print ("-----------------------------------------------------")
-            print ("levenshtein coefficient for "+key+" "+value+":"+str(leven_coeff))
-            #WE CAN EVALUATE THE COEFFICIENT AND IF ITS VALUE IS LOWER THAN A THRESHOLD, 
-            #WE CAN SUGGEST THE COMMAND AGAINST WE ARE COMPARING
-            #OTHERWISE WE CAN JUST NOTIFY WE DIDNT UNDERSTOOD THE COMMAND
-            #JUST ADJUST THE COEFFICIENT THRESHOLD
-            
-            print ("Simulated output follows for all pairs:")
-            
-            if leven_coeff == 0:
-                print ("command recognized, exact match")            
-            elif leven_coeff > 4:
-                print ("command not recognized, please try again...")
-            else: print ("command "+value+", not recognized, maybe you were referring to "+key+"?")
-            
-            if (leven_coeff < levencoeff_min):
-                levencoeff_min = leven_coeff
-                minaction = key
-                
-        print ("\nAction suggested for command "+command+" (the one with lesser coefficient) is:")
-        #evaluate again to show minimal action
-        if levencoeff_min == 0:
-            print ("command recognized, exact match")            
-        elif levencoeff_min > 4:
-            print ("command "+command+" not recognized, please try again...")
-        else: print ("command "+command+" not recognized, maybe you were referring to "+minaction+"?")
-
-        return minaction
-        
-        
-            
     def _make_plot_bbva(self, my_zipcode, my_column):
         my_column = my_column.upper()
         if my_column == 'IMPORTE':
@@ -156,6 +175,33 @@ class Player(telepot.aio.helper.ChatHandler):
 
         return 'D:/D4S/BBVA/output/ExampleMatPlotLib.png'
 
+    def _make_plot_bbva_avg(self, cp_list):
+        df = pd.read_csv('D:/D4S/BBVA/output/MadridZipcodes_Categories.csv', sep=';', index_col=False, header=0)
+        df.drop(['date', 'Filtered to at 10:42:26'], axis=1, inplace=True)
+
+        zps = cp_list
+        df_zps = pd.DataFrame()
+
+        for zp in zps:
+            df_temp = df.loc[df["zipcode"] == zp]
+            df_zps = df_zps.append(df_temp)
+
+        df_zps = df_zps.groupby(["zipcode", "category"]).mean().reset_index(level="category")
+        df_avgs = df_zps.loc[df_zps["category"] == "es_barsandrestaurants"]["avg"].sort_values(ascending=False)
+        index = df_avgs.index
+
+        N = len(df_avgs)
+        width = 0.5
+        x = range(N)
+        plt.bar(x, df_avgs, width, color="blue")
+        plt.xticks(x, index, rotation='vertical')
+        plt.title('CPs con más bares y restaurantes (precios medios)')
+        #plt.show()
+        plt.savefig('D:/D4S/BBVA/output/ExampleMatPlotLib.png', bbox_inches='tight')
+        plt.close()
+
+        return 'D:/D4S/BBVA/output/ExampleMatPlotLib.png'
+
     def _make_plot_mob(self, my_zipcode):
         df_mov = pd.read_csv('D:/D4S/BBVA/output/MadridZipcodes_MobilityProfiling.csv', sep=';', index_col=False, header=0)
         df_mov = df_mov[np.isfinite(df_mov['home_cp'])]
@@ -183,20 +229,107 @@ class Player(telepot.aio.helper.ChatHandler):
         
         return 'D:/D4S/BBVA/output/ExampleMatPlotLib_Mob.png'
 
+    def _make_plot_mob_most(self):
+        df_mov = pd.read_csv('D:/D4S/BBVA/output/MadridZipcodes_MobilityProfiling.csv', sep=';', index_col=False, header=0)
+        df_mov = df_mov[np.isfinite(df_mov['home_cp'])]
+        df_mov.home_cp = df_mov.home_cp.astype(int)
+        df_mov.drop(['gender', 'age', 'segment'], axis=1, inplace=True)
+        df_mov = df_mov[df_mov['home_cp'] >= 28000]
+        df_mov = df_mov[df_mov['home_cp'] <= 28999]
+
+        df_mov = df_mov.groupby(['destination'])['n_people'].sum().reset_index()
+        df_mov = df_mov.sort_values(by=['n_people', 'destination'], ascending=[False, True])
+
+        df_x = df_mov['destination'].head(n=10)
+        df_y = df_mov['n_people'].head(n=10)
+        
+        self._st_cp_list = df_x
+        
+        N = len(df_y)
+        width = 0.5
+        x = range(N)
+        plt.bar(x, df_y, width, color="blue")
+        plt.xticks(x, df_x, rotation='vertical')
+        title = "Top 10 CPs más frecuentados para tu caso"
+        plt.title(title)
+        plt.savefig('D:/D4S/BBVA/output/ExampleMatPlotLib_Mob.png', bbox_inches='tight')
+        plt.close()
+        
+        return 'D:/D4S/BBVA/output/ExampleMatPlotLib_Mob.png'
+   
+    
+    def format_for_print2(self, df):    
+        table = PrettyTable(list(df.columns))
+        for row in df.itertuples():
+            table.add_row(row[1:])
+        return str(table)    
+        
     async def open(self, initial_msg, seed):
-        #await self.sender.sendMessage('Hola!\nPodemos hablar de cómo se gasta el dinero la gente en Madrid.\n¿De qué código postal te gustaría saber la media de importe de compras?')
-        await self.sender.sendMessage('Hola!: http://www.google.es')
+        await self.sender.sendMessage('¡Hola!\nPuedo ayudarte en tu ocio\n¿En qué estás interesado?')
         return True  # prevent on_message() from being called on the initial message
 
     async def on_chat_message(self, msg):
         content_type, chat_type, chat_id = telepot.glance(msg)
 
-        #self._calculate_command(msg['text'].upper())
-        self._calc_command(msg['text'].upper())
-        await self.sender.sendMessage('Prueba más...')
-        return
+        action = self._extract_command(msg['text'].upper())
+        await self.sender.sendMessage('Detectado: '+action+'.')
         
-		
+        #["VIAJ", "COMPR", "FIESTA", "BAR", "RESTAURANTE", ""]
+        #self._status = 'NONE'
+        #self._st_scope = 'NONE'
+        #self._st_cp = 0
+        if action == 'VIAJ' or action == 'EXCURSIÓN':
+            if self._status == 'NONE' and self._st_scope == 'NONE' and self._st_cp == 0:
+                await self.sender.sendMessage('Mmmh, un viaje, suena bien.\n¿En qué quieres que te ayude?')
+                self._status = 'VIAJE'
+                return
+            else:
+                await self.sender.sendMessage('¿Puedes decírmelo de otra forma, por favor?')
+                return
+        elif action == 'CENAR' or action == 'COMER' or action == 'TOMAR' or action == 'TAPAS':
+            with open(self._make_plot_mob_most(), "rb") as image_file:
+                await self.sender.sendPhoto(image_file)
+                self._st_scope = action
+            return
+        elif action == 'CUANTO' or action == 'CUÁNTO' or action == 'CUESTA' or action == 'PRECIO' or action == 'COSTE':
+            if self._st_scope == 'CENAR' or self._st_scope == 'COMER' or self._st_scope == 'TOMAR' or self._st_scope == 'TAPAS':
+                with open(self._make_plot_bbva_avg(self._st_cp_list), "rb") as image_file:
+                    await self.sender.sendPhoto(image_file)
+                    #self._st_scope = action
+                return
+            else:
+                await self.sender.sendMessage('Lo siento, no tengo información de precios respecto a ese tema.')
+                return
+        elif action == 'RESTAURANTE' or action == 'GARITO' or action == 'BAR' or action == 'RESTAURANTE' or action == 'LOCAL' or action == 'SUGERIR' or action == 'SUGERENCIA' or action == 'PROPON' or action == 'PROPUESTA':
+            if self._st_scope == 'CENAR' or self._st_scope == 'COMER' or self._st_scope == 'TOMAR':
+                await self.sender.sendMessage('¿A qué código postal prefieres ir de los que te he comentado?')
+            else:
+                await self.sender.sendMessage('Necesito saber si quieres ir a comer o a cenar.')
+                return
+        elif action == 'CP':
+            if self._st_cp != 0:
+                if self._st_scope == 'CENAR' or self._st_scope == 'COMER' or self._st_scope == 'TOMAR' or self._st_scope == 'TAPAS':
+                    df_places = self._list_places(self._st_cp)
+                    #text = self.format_for_print2(df_places)
+                    text = ''
+                    for row in df_places.iterrows():
+                        text += str(row[1][0])
+                        text += " - "
+                        text += str(row[1][1])
+                        text += " - "
+                        text += str(row[1][2])
+                        text += "\n\n"                    
+                    await self.sender.sendMessage(text)
+                    return
+            else:
+                await self.sender.sendMessage('Necesito saber a qué código postal de los que te he comentado quieres ir.')
+                return
+        else:
+            await self.sender.sendMessage('Necesito más contexto sobre lo que me estás preguntando.')
+            return
+            
+
+
         
         #with open('D:/D4S/BotBD4SG/images/like.png', "rb") as image_file:
             #await self.sender.sendPhoto(image_file)
@@ -265,10 +398,12 @@ class Player(telepot.aio.helper.ChatHandler):
 
 
 TOKEN = sys.argv[1]
+gmaps = gm.Client(key=sys.argv[2])
+
 
 bot = telepot.aio.DelegatorBot(TOKEN, [
     pave_event_space()(
-        per_chat_id(), create_open, Player, timeout=30),
+        per_chat_id(), create_open, Player, timeout=120),
 ])
 
 loop = asyncio.get_event_loop()
